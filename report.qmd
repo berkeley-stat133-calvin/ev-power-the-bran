@@ -1,34 +1,295 @@
 ---
 title: "EV Power - Lab 4 Project Report"
-format: typst
+format: pdf
+echo: false
 ---
 
-# Example Solution 1
+::: {.content-hidden when-format="pdf"}
 
-## **Part 0: libraries**
+I do not want any of this in the report
+The above line should prevent any of this from appearing in the rendered pdf
+
+# Example Solution 1 
+
+## **Part 0: libraries** 
 
 ```{r}
+#| include: false
+library(tidyverse)
+library(readr)
+library(sf)
+library(usmap)
+library(patchwork)
+```
+
+## **Part 1:** **Defining Research Question** 
+
+Chosen Question: 
+    Does the most used renewable or non-renewable power source effect the avg cost of power by state? Does the portion of power produced renewably have an impact?
+    
+
+## **Part 2: Data Preparation and Cleaning** 
+
+```{r}
+#| include: false
+clean_total_use <- function(file_path){
+    dirty_total_use <- read.csv(file_path)
+    clean_total_use <- dirty_total_use[,-1]
+    clean_total_use <- t(clean_total_use)
+    clean_total_use <- as.data.frame(clean_total_use)
+    col_names = tolower(str_remove_all(dirty_total_use$Energy_Source,"[^A-Za-z_].*"))
+    colnames(clean_total_use)<- col_names
+    clean_total_use <- rownames_to_column(clean_total_use,var = "state")
+    clean_total_use
+}
+clean_renewable_use <- function(file_path){ # all units are wrong and can be ignored
+    #I thought I would need to unit conversion but that is wrong
+    renewable_use <- read.csv(file_path)
+    colnames(renewable_use) <- str_remove_all(colnames(renewable_use),"_[0-9]+")
+    renewable_use <- renewable_use |>
+        pivot_wider(values_from = Renewable_Use, names_from = Energy_Source)
+
+
+    renewable_use <- as.data.frame(renewable_use)
+    rownames(renewable_use) <- toupper(renewable_use$State)
+
+
+    colnames(renewable_use) <- str_replace_all(tolower(colnames(renewable_use))," ","_")
+    renewable_use[,-1] <- lapply(renewable_use[,-1], function(x) as.double(str_remove_all(x,"[^0-9\\.]")))
+    renewable_use |> mutate(state = toupper(state))
+}
+#use above functions
+total_use_2021 <- clean_total_use("data/total-use-2021.csv")
+renewable_use_2021 <- clean_renewable_use("data/renew-use-2021.csv")
+total_use_2022 <- clean_total_use("data/total-use-2022.csv")
+renewable_use_2022 <- clean_renewable_use("data/renew-use-2022.csv")
+total_use_2023 <- clean_total_use("data/total-use-2023.csv")
+renewable_use_2023 <- clean_renewable_use("data/renew-use-2023.csv")
+colnames(total_use_2022) <- colnames(total_use_2021)
+colnames(total_use_2023) <- colnames(total_use_2021)
+#av
+file_path <- "data/av-energy-price-2021-2023.csv"
+raw_data_av <- read_lines(file_path,skip = 2)
+cleaned_data_av <- gsub("\\\"", "", raw_data_av)
+df_av <- as.data.frame(read.table(text = cleaned_data_av, sep = ",", header = TRUE))
+rownames(df_av) <- df_av$State
+colnames(df_av) <- c("","av_2021","av_2022","av_2023")
+df_av <- df_av[,-1]
+regex_to_remove <- "([^0-9\\.])"
+df_av[] <- lapply(df_av, function(x) str_remove_all(x,regex_to_remove))
+df_av[] <- lapply(df_av, function(x) str_remove_all(x,"\\.$")) #there is def a better way but my brain is fried rn
+df_av[] <- lapply(df_av, as.numeric)
+df_av <- rownames_to_column(df_av,var = "state")
+#split into 3 dfs that have year and state as seperate cols
+#this will let me keep the format used in the other DFs
+df_av_2021 <- subset(df_av, select = -c(av_2022,av_2023)) |> mutate(year = 2021)
+df_av_2022 <- subset(df_av, select = -c(av_2021,av_2023)) |> mutate(year = 2022)
+df_av_2023 <- subset(df_av, select = -c(av_2021,av_2022)) |> mutate(year = 2023)
+colnames(df_av_2021) <- c("state","av_cost","year")
+colnames(df_av_2022) <- c("state","av_cost","year")
+colnames(df_av_2023) <- c("state","av_cost","year")
+df_av <- rbind(df_av_2021, df_av_2022)
+df_av <- rbind(df_av, df_av_2023)
+rm(df_av_2021) # remove temp dfs from memory as they will never be used again
+rm(df_av_2022)
+rm(df_av_2023)
+#ev
+file_path <- "data/ev-registrations-by-state-2023.csv"
+df_ev <- as.data.frame(read_csv(file_path, skip = 2))
+row_names <- state.abb[match(df_ev$STATE[1:51],state.name)]
+row_names[9] <- "DC"
+row_names[52] <- "US"
+rownames(df_ev) <- row_names
+df_ev <- subset(df_ev, select = -STATE)
+df_ev[] <- lapply(df_ev, function(x) str_remove_all(x,regex_to_remove))
+df_ev <- rownames_to_column(df_ev,var = "state")
+df_ev <- df_ev|> mutate(year = 2023)
+
+
+rm(row_names) #remove unneeded values from memory
+rm(file_path)
+rm(regex_to_remove)
+rm(raw_data_av)
+rm(cleaned_data_av)
+```
+
+## **Part 3: Joining / Pivoting Datasets for Analysis** {.unnumbered .unlisted}
+
+```{r}
+#| include: false
+#start merging each year of total and ev
+total_p_renew_2021 <- left_join(total_use_2021,renewable_use_2021)
+total_p_renew_2022 <- left_join(total_use_2022,renewable_use_2022)
+total_p_renew_2023 <- left_join(total_use_2023,renewable_use_2023)
+#these are easy to merge since they have the data for the same year and the same state names
+#these are also good for merging since they together show the total power use from all major power sources by state in a year
+
+total_p_renew_2021 <- total_p_renew_2021 |> mutate(year = 2021)
+total_p_renew_2022 <- total_p_renew_2022 |> mutate(year = 2022)
+total_p_renew_2023 <- total_p_renew_2023 |> mutate(year = 2023)
+
+total_p_renew_all_years <- rbind(total_p_renew_2021, total_p_renew_2022)
+total_p_renew_all_years <- rbind(total_p_renew_all_years, total_p_renew_2023)
+
+
+#this uses rbind to merge all into one DF for all years
+#this might not be needed but I might want it so 
+
+#add the av to the frame
+all_without_ev <- left_join(total_p_renew_all_years,df_av, by = c("state","year"))
+all_data <- all_without_ev # I don't use the EV data, so I will not add it all_data
+#however this is where I would do it
+
+#this frame now includes all data for all years minus ev
+#I could add ev for using a full join and handle the NAs later but I think that would make things harder on myself in the long run
+#im honestly not sure what I will use most of this data for, but having it all in one place will gaurnetee that I have all the data I want when I make the maps in the next step
+
+
+
+rm(total_p_renew_2021) #remove unneeded values from memory
+rm(total_p_renew_2022)
+rm(total_p_renew_2023)
+rm(total_p_renew_all_years)
+rm(renewable_use_2021)
+rm(renewable_use_2022)
+rm(renewable_use_2023)
+rm(df_av)
+rm(total_use_2021)
+rm(total_use_2022)
+rm(total_use_2023)
+rm(all_without_ev)
 
 ```
 
-## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+## **Part 4: Mapping Visualization** 
 
-## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+#| fig-width: 4
+#| fig-height: 6
+states_sf <- usmap::us_map()
+states_sf <- subset(states_sf,select = c("abbr","geom"))
+colnames(states_sf) <- c("state","geom")
+joined_df <- left_join(all_data,states_sf)
+rm(states_sf) # states_sf is no longer needed after the join with all_data
+
+# power cost by state 
+
+av_cost_graph_2021 <- ggplot(joined_df |> filter(year == 2021)) +
+  geom_sf(aes(geometry = geom, fill = av_cost)) +
+  theme_void() + labs(title = "Average Cost of Power by State in 2021")+
+  scale_fill_continuous(name = "Average Power Cost")
+av_cost_graph_2022 <- ggplot(joined_df |> filter(year == 2022)) +
+  geom_sf(aes(geometry = geom, fill = av_cost)) +
+  theme_void() + labs(title = "Average Cost of Power by State in 2022")+
+  scale_fill_continuous(name = "Average Power Cost")
+av_cost_graph_2023 <- ggplot(joined_df |> filter(year == 2023)) +
+  geom_sf(aes(geometry = geom, fill = av_cost)) +
+  theme_void() + labs(title = "Average Cost of Power by State in 2023")+
+  scale_fill_continuous(name = "Average Power Cost")
+
+
+show_av_cost_graph <- av_cost_graph_2021 / av_cost_graph_2022 / av_cost_graph_2023
+
+# most used renewable by state
+joined_df <- joined_df|>
+    mutate(most_renewable = case_when(
+        biomass == pmax(biomass, geothermal, hydropower, solar_energy, wind_energy) ~ "biomass",
+        geothermal == pmax(biomass, geothermal, hydropower, solar_energy, wind_energy) ~ "geothermal",
+        hydropower == pmax(biomass, geothermal, hydropower, solar_energy, wind_energy) ~ "hydro",
+        solar_energy == pmax(biomass, geothermal, hydropower, solar_energy, wind_energy) ~ "solar",
+        wind_energy == pmax(biomass, geothermal, hydropower, solar_energy, wind_energy) ~ "wind"
+  ))
+most_renewable_2021 <- ggplot(joined_df |> filter(year == 2021)) +
+  geom_sf(aes(geometry = geom, fill = most_renewable)) +
+  theme_void() + labs(title = "Most Used Renewable by State in 2021",fill = "Most Used Renewable")
+most_renewable_2022 <- ggplot(joined_df |> filter(year == 2022)) +
+  geom_sf(aes(geometry = geom, fill = most_renewable)) +
+  theme_void() + labs(title = "Most Used Renewable by State in 2022",fill = "Most Used Renewable")
+most_renewable_2023 <- ggplot(joined_df |> filter(year == 2023)) +
+  geom_sf(aes(geometry = geom, fill = most_renewable)) +
+  theme_void() + labs(title = "Most Used Renewable by State in 2023",fill = "Most Used Renewable")
+show_graph_most_renewable <- most_renewable_2021 / most_renewable_2022 / most_renewable_2023
+
+# most used non-renewable by state
+
+joined_df <- joined_df|>
+    mutate(most_non_renewable = case_when(
+        coal == pmax(coal, natural, petroleum, nuclear) ~ "coal",
+        natural == pmax(coal, natural, petroleum, nuclear) ~ "natural",
+        petroleum == pmax(coal, natural, petroleum, nuclear) ~ "petroleum",
+        nuclear == pmax(coal, natural, petroleum, nuclear) ~ "nuclear"
+  ))
+
+most_non_renewable_2021 <- ggplot(joined_df |> filter(year == 2021)) +
+  geom_sf(aes(geometry = geom, fill = most_non_renewable)) +
+  theme_void() + labs(title = "Most Used Non-Renewable by State in 2021",fill = "Most Used Non-Renewable")
+most_non_renewable_2022 <- ggplot(joined_df |> filter(year == 2022)) +
+  geom_sf(aes(geometry = geom, fill = most_non_renewable)) +
+  theme_void() + labs(title = "Most Used Non-Renewable by State in 2022",fill = "Most Used Non-Renewable")
+most_non_renewable_2023 <- ggplot(joined_df |> filter(year == 2023)) +
+  geom_sf(aes(geometry = geom, fill = most_non_renewable)) +
+  theme_void() + labs(title = "Most Used Non-Renewable by State in 2023",fill = "Most Used Non-Renewable")
+show_graph_most_non_renewable <- most_non_renewable_2021 / most_non_renewable_2022 / most_non_renewable_2023
+
+# portion of renewable power
+joined_df <- joined_df|> mutate(portion_of_renewable = total_renewable_energy/sum(coal,natural,petroleum,nuclear))
+
+portion_renewable_2021 <- ggplot(joined_df |> filter(year == 2021)) +
+  geom_sf(aes(geometry = geom, fill = portion_of_renewable)) +
+  theme_void() + labs(title = "Portion of Renewable by State in 2021")+
+  scale_fill_continuous(name = "Portion of Renewable Power Sources")+
+  scale_fill_gradient(low = "blue", high = "red", limits = c(NA,0.005))
+portion_renewable_2022 <- ggplot(joined_df |> filter(year == 2022)) +
+  geom_sf(aes(geometry = geom, fill = portion_of_renewable)) +
+  theme_void() + labs(title = "Portion of Renewable by State in 2022")+
+  scale_fill_continuous(name = "Portion of Renewable Power Sources")+
+  scale_fill_gradient(low = "blue", high = "red", limits = c(NA,0.005))
+portion_renewable_2023 <- ggplot(joined_df |> filter(year == 2023)) +
+  geom_sf(aes(geometry = geom, fill = portion_of_renewable)) +
+  theme_void() + labs(title = "Portion of Renewable by State in 2023")+
+  scale_fill_continuous(name = "Portion of Renewable Power Sources")+
+  scale_fill_gradient(low = "blue", high = "red", limits = c(NA,0.005))
+show_graph_portion_portion_renewable <- portion_renewable_2021/portion_renewable_2022/portion_renewable_2023
+
+show_av_cost_graph
+show_graph_portion_portion_renewable
+show_graph_most_non_renewable
+show_graph_most_renewable
+```
+
+:::
+
+## **Overview** 
+This data contains information about various states, and the various ways that power is generated in those states. The following group of questions encpsulates most of the important aspects of the data, and allows for important conclusions to be drawn.
+
+> Does the most used renewable or non-renewable power source effect the avg cost of power by state? 
+ 
+>Does the portion of power produced renewably have an impact?
+
+These two questions together give a good impression of if renewables impact the cost of power, or if the cost is influenced by a higher portion of renewable sources, by the most common renewable source, or the most common non-renewable source, or, of course, if none of them have a strong link to the average cost of power. 
+
+## **Data and Methods** 
+Following is the head of the joined dataset.
+
+```{r}
+head(all_data)
+```
+
+## **Data and Methods** 
+Following is the maps generated from the combined dataset.
+
+```{r}
+#| fig-width: 4
+#| fig-height: 6
+
+show_av_cost_graph
+show_graph_portion_portion_renewable
+show_graph_most_non_renewable
+show_graph_most_renewable
 
 ```
 
-## **Part 3: Joining / Pivoting Datasets for Analysis**
-
-```{r}
-
-```
-
-## **Part 4: Mapping Visualization**
-
-```{r}
-
-```
+## **Analysis** 
+Clearly almost all power comes from non-renewable sources, with the most any state reaches being under .4%, and the lowest states being less than .1%. It also clear to see that the portion of power from renewable sources does not seem to have a strong correlation with average power cost. This can be seen by comparing California and Texas. Both have comparatively high portion of renewable energy generation, but are on opposite ends of the spectrum of power cost. Since both Texas and California use petroleum power as thier main source. This indicates that power cost is not a direct function of the most common sources of power, or the portion of power generated through renewable means. From this it can be concluded that the a shift to more renewable power would not increase consumer electric cost. This would allow EVs to be powered with cleaner sources, without increasing the consumer cost of power. 
